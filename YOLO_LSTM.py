@@ -851,19 +851,56 @@ y_train2 should be the ground truth in the exact same format of YOLO's output
 
 # train_batch_lstm = ToharGenerator2(train, generator_config, norm=normalize)
 
-""" Add lstm on top of the trained YOLO model . help:"""
+""" Add lstm on top of the trained YOLO model. the lstm should many to many sturcture. each latm cell predict 1 output . help:"""
 # https://stackoverflow.com/questions/49535488/lstm-on-top-of-a-pre-trained-cnn
 # https://github.com/keras-team/keras/issues/5527
 ''' Freeze previous layers '''
 for layer in model.layers:
     layer.trainable = False
 
-x = TimeDistributed(model)(input_image)
-x = TimeDistributed(Flatten())(x)
-x = LSTM(name='lstm')(x)
-lstm_out = Dense( name='lstm_out')(x)
-lstm = Model([input_image, true_boxes], lstm_out)
 
+units = GRID_H * GRID_W * BOX * (4 + 1 + CLASS)
+print("==========",units)
+length=5 #todo:batch size
+
+#todo: input dim is problematic.
+# input_images = Input(shape=( 10 ,IMAGE_H, IMAGE_W, 3))
+#https://riptutorial.com/keras/example/29812/vgg-16-cnn-and-lstm-for-video-classification
+frames, rows, columns, channels = 10, IMAGE_H, IMAGE_W, 3
+video = Input(shape=(frames,
+                     rows,
+                     columns,
+                     channels))
+# cnn_base = VGG16(input_shape=(channels,
+#                               rows,
+#                               columns),
+#                  weights="imagenet",
+#                  include_top=False)
+#
+# cnn_out = GlobalAveragePooling2D()(cnn_base.output)
+# cnn = Model(input=cnn_base.input, output=cnn_out)
+model.trainable = False
+encoded_frames = TimeDistributed(model)(video)
+encoded_sequence = LSTM(256)(encoded_frames)
+hidden_layer = Dense(output_dim=1024, activation="relu")(encoded_sequence)
+outputs = Dense(output_dim=units, activation="softmax")(hidden_layer)
+lstm = Model([video], outputs)
+
+#
+# # x = Reshape((len(train_batch)*10 ,IMAGE_H, IMAGE_W, 3))(input_images)
+# x = TimeDistributed(model)(x)
+# x = TimeDistributed(Flatten())(x)
+# x = LSTM(units, name='lstm')(x) # This has the effect of each LSTM unit returning a sequence of 1 output, one for each time step in the input data
+# # x = Dense( n_output,name='lstm_out')(x)
+# # x = Conv2D(BOX * (4 + 1 + CLASS), (1, 1), strides=(1, 1), padding='same', name='lstm_conv')(x)
+# out = Reshape((GRID_H, GRID_W, BOX, 4 + 1 + CLASS))(x)
+#
+# # small hack to allow true_boxes to be registered when Keras build the model
+# # for more information: https://github.com/fchollet/keras/issues/2790
+# lstm_out = Lambda(lambda args: args[0])([out, true_boxes])
+# lstm = Model(inputs=[input_images, true_boxes], outputs=lstm_out)
+
+print("======== lstm:")
 lstm.summary()
 
 lstm.compile(loss=custom_loss, optimizer=optimizer)
