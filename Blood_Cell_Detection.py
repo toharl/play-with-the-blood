@@ -26,9 +26,9 @@ import pickle
 import os, cv2
 from preprocessing import parse_annotation, BatchGenerator
 from utils import WeightReader, decode_netout, draw_boxes
-
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
+#
+# os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+# os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 # get_ipython().run_line_magic('matplotlib', 'inline')
 
@@ -100,7 +100,7 @@ for img in all_imgs:
 # In[6]:
 
 
-batches = BatchGenerator(all_imgs, generator_config)
+# batches = BatchGenerator(all_imgs, generator_config)
 
 
 # In[19]:
@@ -112,7 +112,7 @@ batches = BatchGenerator(all_imgs, generator_config)
 
 # ** Split the dataset into the training set and the validation set **
 
-# In[ ]:
+
 
 
 def normalize(image):
@@ -529,14 +529,14 @@ tensorboard = TensorBoard(log_dir=os.path.expanduser('~/logs/') + 'blood' + '_' 
                           write_images=False)
 
 optimizer = Adam(lr=1e-4, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
-optimizer = SGD(lr=1e-4, decay=0.0005, momentum=0.9)
-optimizer = RMSprop(lr=1e-5, rho=0.9, epsilon=1e-08, decay=0.0)
+# optimizer = SGD(lr=1e-4, decay=0.0005, momentum=0.9)
+# optimizer = RMSprop(lr=1e-5, rho=0.9, epsilon=1e-08, decay=0.0)
 
 model.compile(loss=custom_loss, optimizer=optimizer)
 
 model.fit_generator(generator        = train_batch,
                     steps_per_epoch  = len(train_batch),
-                    epochs           = 1,#00,
+                    epochs           = 100,
                     verbose          = 1,
                     validation_data  = valid_batch,
                     validation_steps = len(valid_batch),
@@ -547,10 +547,178 @@ model.fit_generator(generator        = train_batch,
 # # Perform detection on image
 
 # In[17]:
+def predict(model, image, i, img_name, path=""):
+    """
+    input_size = IMAGE_H
 
+    image_h, image_w, _ = image.shape
+    feature_extractor = backend.FullYoloFeature()
+    image = cv2.resize(image, (input_size, input_size))
+    image =feature_extractor.normalize(image)
+
+    input_image = image[:,:,::-1]
+    input_image = np.expand_dims(input_image, 0)
+    dummy_array = np.zeros((1,1,1,1, MAX_BOX_PER_IMAGE,4))
+
+    netout = model.predict([input_image, dummy_array])[0]
+    boxes  = decode_netout(netout, ANCHORS, len(LABELS))
+    """
+    dummy_array = np.zeros((1, 1, 1, 1, TRUE_BOX_BUFFER, 4))
+    # print("dummy array:", dummy_array)
+    plt.figure(figsize=(10, 10))
+
+    input_image = cv2.resize(image, (416, 416))
+    input_image = input_image / 255.
+    input_image = input_image[:, :, ::-1]
+    input_image = np.expand_dims(input_image, 0)
+
+    netout = model.predict([input_image, dummy_array])
+
+    boxes = decode_netout(netout[0],
+                          obj_threshold=OBJ_THRESHOLD,
+                          nms_threshold=NMS_THRESHOLD,
+                          anchors=ANCHORS,
+                          nb_class=CLASS)
+    image = draw_boxes(image, boxes, labels=LABELS)
+
+    plt.imshow(image[:, :, ::-1])
+    path = str(path)
+    if i <= 100:
+        # Create target directory & all intermediate directories if don't exists
+        if not os.path.exists(path):
+            os.makedirs(path)
+            print("Directory ", path, " Created ")
+        else:
+            pass
+            # print("Directory ", path, " already exists")
+        #os.makedirs(path) # create the directory on given path, also if any intermediate-level directory don’t exists then it will create that too.
+        plt.savefig(path+ "/" + img_name)
+
+    return boxes
+
+from utils import decode_netout, compute_overlap, compute_ap
+
+from os.path import normpath, basename
+
+def evaluate(model, generator,
+             iou_threshold=0.3,
+             score_threshold=0.3,
+             max_detections=100,
+             save_path=None):
+    """ Evaluate a given dataset using a given model.
+    code originally from https://github.com/fizyr/keras-retinanet
+
+    # Arguments
+        generator       : The generator that represents the dataset to evaluate.
+        model           : The model to evaluate.
+        iou_threshold   : The threshold used to consider when a detection is positive or negative.
+        score_threshold : The score confidence threshold to use for detections.
+        max_detections  : The maximum number of detections to use per image.
+        save_path       : The path to save images with visualized detections to.
+    # Returns
+        A dict mapping class names to mAP scores.
+    """
+    # gather all detections and annotations
+    all_detections = [[None for i in range(generator.num_classes())] for j in range(generator.size())]
+    all_annotations = [[None for i in range(generator.num_classes())] for j in range(generator.size())]
+
+    for i in range(generator.size()):
+        raw_image = generator.load_image(i)
+
+        path = generator.images[i]['filename']
+        img_name = basename(normpath(path))
+
+        raw_height, raw_width, raw_channels = raw_image.shape
+
+        # make the boxes and the labels
+        pred_boxes = predict(model, raw_image, i, img_name, path=save_path)
+
+        score = np.array([box.score for box in pred_boxes])
+        pred_labels = np.array([box.label for box in pred_boxes])
+
+        if len(pred_boxes) > 0:
+            pred_boxes = np.array([[box.xmin * raw_width, box.ymin * raw_height, box.xmax * raw_width,
+                                    box.ymax * raw_height, box.score] for box in pred_boxes])
+        else:
+            pred_boxes = np.array([[]])
+
+            # sort the boxes and the labels according to scores
+        score_sort = np.argsort(-score)
+        pred_labels = pred_labels[score_sort]
+        pred_boxes = pred_boxes[score_sort]
+
+        # copy detections to all_detections
+        for label in range(generator.num_classes()):
+            all_detections[i][label] = pred_boxes[pred_labels == label, :]
+
+        annotations = generator.load_annotation(i)
+
+        # copy detections to all_annotations
+        for label in range(generator.num_classes()):
+            all_annotations[i][label] = annotations[annotations[:, 4] == label, :4].copy()
+
+    # compute mAP by comparing all detections and all annotations
+    average_precisions = {}
+
+    for label in range(generator.num_classes()):
+        false_positives = np.zeros((0,))
+        true_positives = np.zeros((0,))
+        scores = np.zeros((0,))
+        num_annotations = 0.0
+
+        for i in range(generator.size()):
+            detections = all_detections[i][label]
+            annotations = all_annotations[i][label]
+            num_annotations += annotations.shape[0]
+            detected_annotations = []
+
+            for d in detections:
+                scores = np.append(scores, d[4])
+
+                if annotations.shape[0] == 0:
+                    false_positives = np.append(false_positives, 1)
+                    true_positives = np.append(true_positives, 0)
+                    continue
+
+                overlaps = compute_overlap(np.expand_dims(d, axis=0), annotations)
+                assigned_annotation = np.argmax(overlaps, axis=1)
+                max_overlap = overlaps[0, assigned_annotation]
+
+                if max_overlap >= iou_threshold and assigned_annotation not in detected_annotations:
+                    false_positives = np.append(false_positives, 0)
+                    true_positives = np.append(true_positives, 1)
+                    detected_annotations.append(assigned_annotation)
+                else:
+                    false_positives = np.append(false_positives, 1)
+                    true_positives = np.append(true_positives, 0)
+
+        # no annotations -> AP for this class is 0 (is this correct?)
+        if num_annotations == 0:
+            average_precisions[label] = 0
+            continue
+
+        # sort by score
+        indices = np.argsort(-scores)
+        false_positives = false_positives[indices]
+        true_positives = true_positives[indices]
+
+        # compute false positives and true positives
+        false_positives = np.cumsum(false_positives)
+        true_positives = np.cumsum(true_positives)
+
+        # compute recall and precision
+        recall = true_positives / num_annotations
+        precision = true_positives / np.maximum(true_positives + false_positives, np.finfo(np.float64).eps)
+
+        # compute average precision
+        average_precision = compute_ap(recall, precision)
+        average_precisions[label] = average_precision
+
+
+    return average_precisions
 
 model.load_weights("weights_blood.h5")
-
+model = evaluate(model, valid_batch, save_path="/model")
 dummy_array = np.zeros((1,1,1,1,TRUE_BOX_BUFFER,4))
 
 
