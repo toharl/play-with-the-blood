@@ -3,10 +3,10 @@
 
 TEST=0
 
-UNSUP_NUM_IMAGES = 4000 if not TEST else 3
-EVAL_NUM_IMAGES  = 100 if not TEST else 3
-EPOCHS = 180 if not TEST else 3
-SUP=0.5 #SUP is between 0 to 1 represents the relative part of all train samples that are supervised
+UNSUP_NUM_IMAGES = 5000 if not TEST else 5
+EVAL_NUM_IMAGES  = 100 if not TEST else 5
+EPOCHS = 180 if not TEST else 1
+SUP=0.2 #SUP is between 0 to 1 represents the relative part of all train samples that are supervised
 
 # todo:
 # todo: 1. add the pre-trained weights, randomize first and last. use a new label (more images)
@@ -107,7 +107,7 @@ MAX_BOX_PER_IMAGE = 10
 # In[53]:
 
 
-wt_path = 'yolov2.weights'
+wt_path = 'yolov2-voc.weights'
 train_image_folder = './data/images/train2014/'
 train_annot_folder = './data/train_converted/'
 valid_image_folder = './data/images/val2014/'
@@ -124,8 +124,8 @@ def space_to_depth_x2(x):
 
 import frontend
 """ creates a new dir names coco_x with the results, weights, and all the relevant files"""
-TB_COUNT = len([d for d in os.listdir(os.path.expanduser('./results_person/')) if 'coco_' in d]) + 1
-PATH = os.path.expanduser('./results_person/') + 'coco_' + '_' + str(TB_COUNT)
+TB_COUNT = len([d for d in os.listdir(os.path.expanduser('./results_person/')) if 'cococo_' in d]) + 1
+PATH = os.path.expanduser('./results_person/') + 'cococo_' + '_' + str(TB_COUNT)
 os.makedirs(PATH)
 # PATH = "./results_person/results_person/coco__2"
 print("=================== Directory " , PATH ,  " Created ")
@@ -139,6 +139,53 @@ class ToharGenerator(BatchGenerator):
 input_image = Input(shape=(IMAGE_H, IMAGE_W, 3))
 true_boxes = Input(shape=(1, 1, 1, TRUE_BOX_BUFFER, 4))
 
+# ############TINY YOLO
+# # Layer 1
+# x = Conv2D(16, (3, 3), strides=(1, 1), padding='same', name='conv_1', use_bias=False)(input_image)
+# x = BatchNormalization(name='norm_1')(x)
+# x = LeakyReLU(alpha=0.1)(x)
+# encoded = MaxPooling2D(pool_size=(2, 2))(x)
+#
+#
+# # autoencoder:
+#
+# y = Conv2D(16, (3, 3), strides=(1, 1), padding='same',name='decoder_conv_1')(encoded)
+# y = UpSampling2D((2, 2))(y)
+# decoded = Conv2D(3, (3, 3), activation='sigmoid', padding='same',name='decoder_conv_2')(y)
+#
+# autoencoder = Model(input_image, decoded)
+# autoencoder.summary()
+# autoencoder.compile(optimizer='adam', loss='mse')
+# # end autoencoder
+#
+# # Layer 2
+# i = 0
+# x = Conv2D(32 * (2 ** i), (3, 3), strides=(1, 1), padding='same', name='conv_' + str(i + 2), use_bias=False)(encoded)
+# x = BatchNormalization(name='norm_' + str(i + 2))(x)
+# x = LeakyReLU(alpha=0.1)(x)
+# x = MaxPooling2D(pool_size=(2, 2))(x)
+#
+# # Layer 3 - 5
+# for i in range(1, 4):
+#     x = Conv2D(32 * (2 ** i), (3, 3), strides=(1, 1), padding='same', name='conv_' + str(i + 2), use_bias=False)(x)
+#     x = BatchNormalization(name='norm_' + str(i + 2))(x)
+#     x = LeakyReLU(alpha=0.1)(x)
+#     x = MaxPooling2D(pool_size=(2, 2))(x)
+#
+# # Layer 6
+# x = Conv2D(512, (3, 3), strides=(1, 1), padding='same', name='conv_6', use_bias=False)(x)
+# x = BatchNormalization(name='norm_6')(x)
+# x = LeakyReLU(alpha=0.1)(x)
+# x = MaxPooling2D(pool_size=(2, 2), strides=(1, 1), padding='same')(x)
+#
+# # Layer 7 - 8
+# for i in range(0, 2):
+#     x = Conv2D(1024, (3, 3), strides=(1, 1), padding='same', name='conv_' + str(i + 7), use_bias=False)(x)
+#     x = BatchNormalization(name='norm_' + str(i + 7))(x)
+#     x = LeakyReLU(alpha=0.1)(x)
+# ########### END TINY YOLO
+
+######## FULL YOLO ##########
 # Layer 1
 x = Conv2D(32, (3, 3), strides=(1, 1), padding='same', name='conv_1', use_bias=False)(input_image)
 x = BatchNormalization(name='norm_1')(x)
@@ -156,7 +203,7 @@ autoencoder.summary()
 autoencoder.compile(optimizer='adam', loss='mse')
 # end autoencoder
 
-
+# FULL YOLO
 # Layer 2
 x = Conv2D(64, (3, 3), strides=(1, 1), padding='same', name='conv_2', use_bias=False)(encoded)
 x = BatchNormalization(name='norm_2')(x)
@@ -275,6 +322,7 @@ x = LeakyReLU(alpha=0.1)(x)
 # Layer 23
 x = Conv2D(BOX * (4 + 1 + CLASS), (1, 1), strides=(1, 1), padding='same', name='conv_23')(x)
 output = Reshape((GRID_H, GRID_W, BOX, 4 + 1 + CLASS))(x)
+
 
 # small hack to allow true_boxes to be registered when Keras build the model
 # for more information: https://github.com/fchollet/keras/issues/2790
@@ -436,41 +484,41 @@ yolo = Model([input_image, true_boxes], output)
 
 
 '''Load pre-trained weights'''
-# # Load pretrained weights
+# Load pretrained weights
 
 # **Load the weights originally provided by YOLO**
-# print("**Load the weights originally provided by YOLO**")
-# weight_reader = WeightReader(wt_path)
-#
-# weight_reader.reset()  # don't worry! it doesn't delete the weights.
-# nb_conv = 23
-#
-# for i in range(1, nb_conv + 1):
-#     conv_layer = model.get_layer('conv_' + str(i))
-#
-#     if i < nb_conv:
-#         norm_layer = model.get_layer('norm_' + str(i))
-#
-#         size = np.prod(norm_layer.get_weights()[0].shape)
-#
-#         beta = weight_reader.read_bytes(size)
-#         gamma = weight_reader.read_bytes(size)
-#         mean = weight_reader.read_bytes(size)
-#         var = weight_reader.read_bytes(size)
-#
-#         weights = norm_layer.set_weights([gamma, beta, mean, var])
-#
-#     if len(conv_layer.get_weights()) > 1:
-#         bias = weight_reader.read_bytes(np.prod(conv_layer.get_weights()[1].shape))
-#         kernel = weight_reader.read_bytes(np.prod(conv_layer.get_weights()[0].shape))
-#         kernel = kernel.reshape(list(reversed(conv_layer.get_weights()[0].shape)))
-#         kernel = kernel.transpose([2, 3, 1, 0])
-#         conv_layer.set_weights([kernel, bias])
-#     else:
-#         kernel = weight_reader.read_bytes(np.prod(conv_layer.get_weights()[0].shape))
-#         kernel = kernel.reshape(list(reversed(conv_layer.get_weights()[0].shape)))
-#         kernel = kernel.transpose([2, 3, 1, 0])
-#         conv_layer.set_weights([kernel])
+print("**Load the weights originally provided by YOLO**")
+weight_reader = WeightReader(wt_path)
+
+weight_reader.reset()  # don't worry! it doesn't delete the weights.
+nb_conv = 23
+
+for i in range(1, nb_conv + 1):
+    conv_layer = model.get_layer('conv_' + str(i))
+
+    if i < nb_conv:
+        norm_layer = model.get_layer('norm_' + str(i))
+
+        size = np.prod(norm_layer.get_weights()[0].shape)
+
+        beta = weight_reader.read_bytes(size)
+        gamma = weight_reader.read_bytes(size)
+        mean = weight_reader.read_bytes(size)
+        var = weight_reader.read_bytes(size)
+
+        weights = norm_layer.set_weights([gamma, beta, mean, var])
+
+    if len(conv_layer.get_weights()) > 1:
+        bias = weight_reader.read_bytes(np.prod(conv_layer.get_weights()[1].shape))
+        kernel = weight_reader.read_bytes(np.prod(conv_layer.get_weights()[0].shape))
+        kernel = kernel.reshape(list(reversed(conv_layer.get_weights()[0].shape)))
+        kernel = kernel.transpose([2, 3, 1, 0])
+        conv_layer.set_weights([kernel, bias])
+    else:
+        kernel = weight_reader.read_bytes(np.prod(conv_layer.get_weights()[0].shape))
+        kernel = kernel.reshape(list(reversed(conv_layer.get_weights()[0].shape)))
+        kernel = kernel.transpose([2, 3, 1, 0])
+        conv_layer.set_weights([kernel])
 
 
 
@@ -497,23 +545,33 @@ yolo = Model([input_image, true_boxes], output)
 # model.layers[layer_of_interest_index].get_weights()
 # print("======== original last layer is: ========")
 
-#
-# '''randomize first layer weight'''
-#
-# firstlayer = model.get_layer('conv_1')
-# # print(layer.get_config())
-#
-# weights = firstlayer.get_weights()
-# # before = firstlayer.get_weights()
-#
-# new_kernel = np.random.normal(size=weights[0].shape)/(GRID_H*GRID_W)
-# # new_bias   = np.random.normal(size=weights[1].shape)/(GRID_H*GRID_W)
-#
-# firstlayer.set_weights([new_kernel])
-# # after = firstlayer.get_weights()
-#
+
+'''randomize first layer weight'''
+
+firstlayer = model.get_layer('conv_1')
+# print(layer.get_config())
+
+weights = firstlayer.get_weights()
+# before = firstlayer.get_weights()
+
+new_kernel = np.random.normal(size=weights[0].shape)/(GRID_H*GRID_W)
+# new_bias   = np.random.normal(size=weights[1].shape)/(GRID_H*GRID_W)
+
+firstlayer.set_weights([new_kernel])
+# after = firstlayer.get_weights()
+
 # norm_1 = model.get_layer('norm_1')
 # weights = norm_1.get_weights()
+#
+# # size = np.prod(norm_layer.get_weights()[0].shape)
+# #
+# # beta = weight_reader.read_bytes(size)
+# # gamma = weight_reader.read_bytes(size)
+# # mean = weight_reader.read_bytes(size)
+# # var = weight_reader.read_bytes(size)
+# #
+# # weights = norm_layer.set_weights([gamma, beta, mean, var])
+#
 # new_kernel = np.random.normal(size=weights[0].shape)/(GRID_H*GRID_W)
 # norm_1.set_weights([new_kernel])
 #
@@ -562,7 +620,6 @@ def predict(model, image, i, img_name, path=""):
     netout = model.predict([input_image, dummy_array])[0]
     boxes  = decode_netout(netout, ANCHORS, len(LABELS))
     """
-    print("in predict")
     dummy_array = np.zeros((1, 1, 1, 1, TRUE_BOX_BUFFER, 4))
     # print("dummy array:", dummy_array)
     plt.figure(figsize=(10, 10))
@@ -897,30 +954,31 @@ generator_config = {
 
 def normalize(image):
     return image / 255.
-# train_imgs, seen_train_labels = parse_annotation(train_annot_folder, train_image_folder, labels=LABELS)
-# ## write parsed annotations to pickle for fast retrieval next time
-# with open('train_imgs_person', 'wb') as fp:
-#    pickle.dump(train_imgs, fp)
-#
-#
-# ## read saved pickle of parsed annotations
-# with open('train_imgs_person', 'rb') as fp:
-#     train_imgs = pickle.load(fp)
-#
-# from random import shuffle
-# shuffle(train_imgs)
-#
-# with open('train_imgs_shuffled_person', 'wb') as fp:
-#    pickle.dump(train_imgs, fp)
-#
+train_imgs, seen_train_labels = parse_annotation(train_annot_folder, train_image_folder, labels=LABELS)
+## write parsed annotations to pickle for fast retrieval next time
+with open('train_imgs_person', 'wb') as fp:
+   pickle.dump(train_imgs, fp)
+
+
+## read saved pickle of parsed annotations
+with open('train_imgs_person', 'rb') as fp:
+    train_imgs = pickle.load(fp)
+
+from random import shuffle
+shuffle(train_imgs)
+
+with open('train_imgs_shuffled_person', 'wb') as fp:
+   pickle.dump(train_imgs, fp)
+
 with open('train_imgs_shuffled_person', 'rb') as fp:
     train_imgs = pickle.load(fp)
-#
-# valid_imgs, seen_valid_labels = parse_annotation(valid_annot_folder, valid_image_folder, labels=LABELS)
-# ## write parsed annotations to pickle for fast retrieval next time
-# with open('valid_imgs_person', 'wb') as fp:
-#    pickle.dump(valid_imgs, fp)
+
+valid_imgs, seen_valid_labels = parse_annotation(valid_annot_folder, valid_image_folder, labels=LABELS)
+## write parsed annotations to pickle for fast retrieval next time
+with open('valid_imgs_person', 'wb') as fp:
+   pickle.dump(valid_imgs, fp)
 # read saved pickle of parsed annotations
+
 with open('valid_imgs_person', 'rb') as fp:
     valid_imgs = pickle.load(fp)
 
@@ -999,20 +1057,20 @@ t_checkpoint = ModelCheckpoint(PATH+'/T_weights_coco.h5',
 path('./logs/AE/')
 path('./logs/WAE/')
 path('./logs/T/')
-ae_tb_counter = len([log for log in os.listdir(os.path.expanduser('./logs/AE/')) if 'coco_' in log]) + 1
-ae_tensorboard = TensorBoard(log_dir=os.path.expanduser('./logs/AE/') + 'coco_' + '_' + str(ae_tb_counter),
+ae_tb_counter = len([log for log in os.listdir(os.path.expanduser('./logs/AE/')) if 'cococo_' in log]) + 1
+ae_tensorboard = TensorBoard(log_dir=os.path.expanduser('./logs/AE/') + 'cococo_' + '_' + str(ae_tb_counter),
                           histogram_freq=0,
                           write_graph=True,
                           write_images=False)
 
-tb_counter = len([log for log in os.listdir(os.path.expanduser('./logs/WAE')) if 'coco_' in log]) + 1
-tensorboard = TensorBoard(log_dir=os.path.expanduser('./logs/WAE/') + 'coco_' + '_' + str(tb_counter),
+tb_counter = len([log for log in os.listdir(os.path.expanduser('./logs/WAE')) if 'cococo_' in log]) + 1
+tensorboard = TensorBoard(log_dir=os.path.expanduser('./logs/WAE/') + 'cococo_' + '_' + str(tb_counter),
                           histogram_freq=0,
                           write_graph=True,
                           write_images=False)
 
-ttb_counter = len([log for log in os.listdir(os.path.expanduser('./logs/T/')) if 'coco_' in log]) + 1
-ttensorboard = TensorBoard(log_dir=os.path.expanduser('./logs/T/') + 'coco_' + '_' + str(ttb_counter),
+ttb_counter = len([log for log in os.listdir(os.path.expanduser('./logs/T/')) if 'cococo_' in log]) + 1
+ttensorboard = TensorBoard(log_dir=os.path.expanduser('./logs/T/') + 'cococo_' + '_' + str(ttb_counter),
                           histogram_freq=0,
                           write_graph=True,
                           write_images=False)
@@ -1048,7 +1106,11 @@ loss = history.history['loss']
 val_loss = history.history['val_loss']
 l = np.array(loss)
 v = np.array(val_loss)
-np.savetxt(PATH+"/AE_loss_history.txt", str({'loss':l,'val loss':v}), delimiter=",")
+
+f = open(PATH + "/logs.txt", "w")
+f.write("AE:")
+f.write(str({'l': l,'v': v}))
+f.write('\n')
 
 
 print("===================== Done training AE")
@@ -1078,14 +1140,17 @@ plt.title('model loss')
 plt.ylabel('loss')
 plt.xlabel('epoch')
 plt.legend(['train', 'test'], loc='upper left')
-plt.savefig(path(PATH+"/model")+"/wAE_plot.jpg")
+plt.savefig(path(PATH+"/W_AE")+"/wAE_plot.jpg")
 
 loss = history2.history['loss']
 val_loss = history2.history['val_loss']
 l = np.array(loss)
 v = np.array(val_loss)
 
-np.savetxt(PATH+"/model_loss_history.txt", str({'loss':l,'val loss':v}), delimiter=",")
+
+f.write("MODEL w AE:")
+f.write(str({'l': l,'v': v}))
+f.write('\n')
 
 # Perform detection on image
 
@@ -1096,7 +1161,7 @@ np.savetxt(PATH+"/model_loss_history.txt", str({'loss':l,'val loss':v}), delimit
 #take the best weights (not neccecerely the current weights of the model)
 model.load_weights(PATH+"/weights_coco.h5")
 """evaluating on AE+YOLO (original weights from YOLO, then pre-trining with AE (big unsupervised set), then training with small supervised dataset)"""
-AE = evaluate(model, tohar_eval_batch, save_path=PATH+"/AE")
+AE = evaluate(model, tohar_eval_batch, save_path=PATH+"/W_AE")
 print("AE:\n",AE)
 print(np.average(list(AE.values())))
 
@@ -1121,7 +1186,7 @@ plt.title('model loss')
 plt.ylabel('loss')
 plt.xlabel('epoch')
 plt.legend(['train', 'test'], loc='upper left')
-plt.savefig(path(PATH+"/YOLO")+"/NO_AE_plot.jpg")
+plt.savefig(path(PATH+"/NO_AE")+"/NO_AE_plot.jpg")
 
 yolo.load_weights(PATH+"/T_weights_coco.h5")
 NO_AE = evaluate(yolo, tohar_eval_batch, save_path=PATH+"/NO_AE")
@@ -1132,7 +1197,11 @@ loss = yhistory.history['loss']
 val_loss = yhistory.history['val_loss']
 l = np.array(loss)
 v = np.array(val_loss)
-np.savetxt(PATH+"/NO_AE_loss_history.txt", str({'loss':l,'val loss':v}), delimiter=",")
+
+f.write("NO AE:")
+f.write(str({'l': l,'v': v}))
+f.write('\n')
+f.close()
 
 #
 # # """evaluating on original YOLO (no training at all)"""
@@ -1151,8 +1220,8 @@ print(np.average(list(NO_AE.values())))
 
 
 params={'sup to unsup ratio:':SUP,
-        'all train:':train,
-        'supervised:': sup,
+        'all train:':len(train),
+        'supervised:': len(sup),
         "UNSUP_NUM_IMAGES(=all train):":UNSUP_NUM_IMAGES,
         "EVAL_NUM_IMAGES:":EVAL_NUM_IMAGES,
         "EPOCHS": EPOCHS}
@@ -1170,11 +1239,11 @@ f.write(str(np.average(list(NO_AE.values())))+"\n")
 # # f.write(str(np.average(list(YOLO.values())))+"\n")
 f.write("LOG:"+"\n")
 f.write(str(params) )
-f.write("person detection, init whole net randomply (no-pre-trained)")
+f.write("all coco detection,  init with pre trained weights from VOC , randomize first layer, not randomize last layer")
 #
 f.close()
 
-
+exit()
 model.load_weights("./results_person/results_person/coco__2/weights_coco.h5")
 image = cv2.imread('./data/images/val2014/COCO_val2014_000000000139.jpg')
 dummy_array = np.zeros((1,1,1,1,TRUE_BOX_BUFFER,4))
