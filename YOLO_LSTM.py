@@ -4,7 +4,7 @@
 # this code is a modification of:
 # notes:
 # todo : I canceled the randomize weights for the last layer + freezed the weights for all of the layers (some weights were trained anyway).
-
+#todo : mayb -- save to fule during evaluate function the outputs
 # **Outline of Steps**
 #     + Initialization
 #         + Download COCO detection data from http://cocodataset.org/#download
@@ -45,7 +45,7 @@ from imgaug import augmenters as iaa
 import numpy as np
 import pickle
 import os, cv2
-from preprocessing import parse_annotation, BatchGenerator
+from preprocessing import parse_annotation, BatchGenerator, LSTMBatchGenerator
 from utils import WeightReader, decode_netout, draw_boxes
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -55,6 +55,9 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 
 # In[52]:
+SUP_NUM_IMAGES   = 3
+UNSUP_NUM_IMAGES = 3
+EVAL_NUM_IMAGES  = 3
 
 
 LABELS = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
@@ -106,9 +109,10 @@ def space_to_depth_x2(x):
 
 import frontend
 """ creates a new dir names coco_x with the results, weights, and all the relevant files"""
-TB_COUNT = len([d for d in os.listdir(os.path.expanduser('./results_lstm/')) if 'coco_' in d]) + 1
-PATH = os.path.expanduser('./results_lstm/') + 'coco_' + '_' + str(TB_COUNT)
-os.makedirs(PATH)
+# TB_COUNT = len([d for d in os.listdir(os.path.expanduser('./results_lstm/')) if 'coco_' in d]) + 1
+# PATH = os.path.expanduser('./results_lstm/') + 'coco_' + '_' + str(TB_COUNT)
+# os.makedirs(PATH)
+PATH = './lstm/'
 print("=================== Directory " , PATH ,  " Created ")
 # PATH = "./results/coco__25"
 
@@ -116,13 +120,16 @@ print("=================== Directory " , PATH ,  " Created ")
 
 class ToharGenerator2(BatchGenerator):
     def __getitem__(self, item):
-        #t=[x_batch,b_batch],y_batch
-        #  [input,goutndtruth],desired network output]
+        # t= [x_batch,b_batch],y_batch
+        #    [input,goutndtruth],desired network output]
         t = super().__getitem__(item)
-        x_batch = t[0][0]
+        x_batch = t[0][0] #the input
+        GT = t[0][1]
+        y_batch = t[1]
+
         new_x_batch = predict(model,x_batch) #instead of input img vector we want the YOLO's output vector
         t[0][0]= new_x_batch
-        return t
+        return [new_x_batch, GT], y_batch
 
 
 
@@ -262,9 +269,51 @@ output = Lambda(lambda args: args[0])([output, true_boxes])
 
 model = Model([input_image, true_boxes], output)
 
-model.summary()
+# model.summary()
+print("output=====")
+print(output.shape)
+'''build lstm model: '''
+lstm_input = Input(shape=(GRID_H, GRID_W, BOX, 4 + 1 + CLASS))
+
+input_dim = GRID_H * GRID_W * BOX * (4 + 1 + CLASS)
+# input_dim=(GRID_H,GRID_W, BOX, 4 + 1 + CLASS, 1, 1, 1, TRUE_BOX_BUFFER, 4)
+print(input_dim)
+
+timesteps = EVAL_NUM_IMAGES
 
 
+# lstm.add(units= Dense(input_shape=(GRID_H, GRID_W, BOX, 4 + 1 + CLASS)))
+# l=Lambda(lambda x: K.batch_flatten(x))(lstm_input)
+# l=LSTM(input_dim, batch_input_shape= (None, timesteps, input_dim), activation='sigmoid',recurrent_activation='hard_sigmoid',return_sequences=True)(l)
+# # l = (Dense(output_dim=input_dim, activation="relu"))(lstm)
+# #
+# # # l = LSTM(input_dim)(l)
+# # # # hidden_layer = Dense(output_dim=input_shape, activation="relu")(x)
+# # # # outputs = Dense(output_dim=input_shape, activation="softmax")(hidden_layer)
+# #
+# loutput = Reshape((GRID_H, GRID_W, BOX, 4 + 1 + CLASS))(l)
+# #
+# # # small hack to allow true_boxes to be registered when Keras build the model
+# # # for more information: https://github.com/fchollet/keras/issues/2790
+# out = Lambda(lambda args: args[0])([loutput, true_boxes])
+#
+#
+#
+# lstm = Model([lstm_input, true_boxes], out)
+# lstm.summary()
+
+input_dim = GRID_H * GRID_W * BOX * (4 + 1 + CLASS)
+
+#take 5 frames every time
+frames = Input(shape=(5, IMAGE_H, IMAGE_W, 3))
+x = TimeDistributed(model)(frames)
+x = TimeDistributed(Flatten())(x)
+#now- timestamsp=5
+x = LSTM(input_dim, name='lstm')(x)
+out = Dense(input_dim, name='out')(x)
+lstm = Model(inputs=frames, outputs=out)
+
+exit()
 # # Load pretrained weights
 
 # **Load the weights originally provided by YOLO**
@@ -729,9 +778,7 @@ generator_config = {
 def normalize(image):
     return image / 255.
 
-SUP_NUM_IMAGES   = 3
-UNSUP_NUM_IMAGES = 3
-EVAL_NUM_IMAGES  = 1
+
 
 # train_imgs, seen_train_labels = parse_annotation(train_annot_folder, train_image_folder, labels=LABELS)
 # ## write parsed annotations to pickle for fast retrieval next time
@@ -773,9 +820,13 @@ eval_imgs = valid_imgs[:EVAL_NUM_IMAGES] #we use the valid_imgs as our evaluatio
 valid_batch = BatchGenerator(val, generator_config, norm=normalize, jitter=False)
 
 
+
 """we evaluate the model on the validation set"""
 tohar_eval_batch = BatchGenerator(eval_imgs, generator_config, norm=normalize, jitter=False,
                                   shuffle=False)
+
+
+
 
 # **Setup a few callbacks and start the training**
 
@@ -805,8 +856,8 @@ org_checkpoint = ModelCheckpoint(PATH+'/original_weights_coco.h5',
 # In[ ]:
 
 
-tb_counter = len([log for log in os.listdir(os.path.expanduser('./logs/lstm/')) if 'coco_' in log]) + 1
-tensorboard = TensorBoard(log_dir=os.path.expanduser('./logs/lstm/') + 'coco_' + '_' + str(tb_counter),
+tb_counter = len([log for log in os.listdir(os.path.expanduser('./lstm/')) if 'coco_' in log]) + 1
+tensorboard = TensorBoard(log_dir=os.path.expanduser('./lstm/') + 'coco_' + '_' + str(tb_counter),
                           histogram_freq=0,
                           write_graph=True,
                           write_images=False)
@@ -820,6 +871,23 @@ model.compile(loss=custom_loss, optimizer=optimizer)
 
 from keras.callbacks import TensorBoard
 
+"""evaluating on original YOLO (no training at all)"""
+model.load_weights("yolo.h5")
+# YOLO = evaluate(model, tohar_eval_batch, save_path=PATH+"/YOLO")
+# print("YOLO:\n", YOLO)
+# print(np.average(list(YOLO.values())))
+
+'''creating a modified batch to the lstm:'''
+# [x_batch, GT], y_batch
+# [x_batch, GT], \
+lstm_batch = LSTMBatchGenerator(eval_imgs, generator_config, model, norm=None, jitter=False, shuffle=False)
+
+
+print(len(lstm_batch))
+
+
+
+exit()
 
 """X_train2 should be YOLO's output vectors
 y_train2 should be the ground truth in the exact same format of YOLO's output
@@ -851,40 +919,51 @@ y_train2 should be the ground truth in the exact same format of YOLO's output
 
 # train_batch_lstm = ToharGenerator2(train, generator_config, norm=normalize)
 
-""" Add lstm on top of the trained YOLO model. the lstm should many to many sturcture. each latm cell predict 1 output . help:"""
+""" Add lstm on top of the trained YOLO model. the lstm should have many to many sturcture. each latm cell predict 1 output . help:"""
 # https://stackoverflow.com/questions/49535488/lstm-on-top-of-a-pre-trained-cnn
 # https://github.com/keras-team/keras/issues/5527
 ''' Freeze previous layers '''
 for layer in model.layers:
     layer.trainable = False
 
+from keras.applications.vgg16 import VGG16
+from keras.models import Model
+from keras.layers import Dense, Input
+from keras.layers.pooling import GlobalAveragePooling2D
+from keras.layers.recurrent import LSTM
+from keras.layers.wrappers import TimeDistributed
+from keras.optimizers import Nadam
+
+frames = len(tohar_eval_batch)
+print(frames)
 
 units = GRID_H * GRID_W * BOX * (4 + 1 + CLASS)
 print("==========",units)
 length=5 #todo:batch size
 
 #todo: input dim is problematic.
-# input_images = Input(shape=( 10 ,IMAGE_H, IMAGE_W, 3))
+# input_images = Input(shape=( None, frames ,IMAGE_H, IMAGE_W, 3))
 #https://riptutorial.com/keras/example/29812/vgg-16-cnn-and-lstm-for-video-classification
-frames, rows, columns, channels = 10, IMAGE_H, IMAGE_W, 3
-video = Input(shape=(frames,
-                     rows,
-                     columns,
-                     channels))
-# cnn_base = VGG16(input_shape=(channels,
-#                               rows,
-#                               columns),
-#                  weights="imagenet",
-#                  include_top=False)
+
+# frames, rows, columns, channels = 10, IMAGE_H, IMAGE_W, 3
+# video = Input(shape=(frames,
+#                      rows,
+#                      columns,
+#                      channels))
 #
-# cnn_out = GlobalAveragePooling2D()(cnn_base.output)
-# cnn = Model(input=cnn_base.input, output=cnn_out)
-model.trainable = False
-encoded_frames = TimeDistributed(model)(video)
-encoded_sequence = LSTM(256)(encoded_frames)
-hidden_layer = Dense(output_dim=1024, activation="relu")(encoded_sequence)
-outputs = Dense(output_dim=units, activation="softmax")(hidden_layer)
-lstm = Model([video], outputs)
+# # cnn_base = VGG16(input_shape=(rows, columns, channels),
+# #                  weights="imagenet",
+# #                  include_top=False)
+# # cnn_out = GlobalAveragePooling2D()(cnn_base.output)
+# # cnn = Model(input=cnn_base.input, output=cnn_out)
+#
+# model.trainable = False
+#
+# encoded_frames = TimeDistributed(model)(video)
+# encoded_sequence = LSTM(256)(encoded_frames)
+# hidden_layer = Dense(output_dim=1024, activation="relu")(encoded_sequence)
+# outputs = Dense(output_dim=units, activation="softmax")(hidden_layer)
+# lstm = Model([video], outputs)
 
 #
 # # x = Reshape((len(train_batch)*10 ,IMAGE_H, IMAGE_W, 3))(input_images)
@@ -894,17 +973,15 @@ lstm = Model([video], outputs)
 # # x = Dense( n_output,name='lstm_out')(x)
 # # x = Conv2D(BOX * (4 + 1 + CLASS), (1, 1), strides=(1, 1), padding='same', name='lstm_conv')(x)
 # out = Reshape((GRID_H, GRID_W, BOX, 4 + 1 + CLASS))(x)
-#
-# # small hack to allow true_boxes to be registered when Keras build the model
-# # for more information: https://github.com/fchollet/keras/issues/2790
-# lstm_out = Lambda(lambda args: args[0])([out, true_boxes])
-# lstm = Model(inputs=[input_images, true_boxes], outputs=lstm_out)
+
+
 
 print("======== lstm:")
 lstm.summary()
 
 lstm.compile(loss=custom_loss, optimizer=optimizer)
 
+exit()
 lstm.fit_generator(generator=train_batch,  # train_batch #(input, ground_truth)
                     steps_per_epoch=len(train_batch),
                     epochs=3,
